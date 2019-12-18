@@ -1,6 +1,7 @@
 [package]
 name = "lockfree"
-version = "0.5.1"
+version = "0.6.0"
+edition = "2018"
 authors = ["Bruno Corrêa Zimmermann <brunoczim@gmail.com>"]
 description = "This crate provides concurrent data structures and a solution to the ABA problem as an alternative of hazard pointers"
 repository = "https://gitlab.com/bzim/lockfree/"
@@ -11,3 +12,6 @@ readme = "README.md"
 
 [dependencies]
 owned-alloc = "0.2"
+
+[features]
+no_std = []
