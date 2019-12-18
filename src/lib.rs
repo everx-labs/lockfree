@@ -81,30 +81,30 @@ pub trait SlabStorage {
 
     /// Tries to index the storage. If the index is out of bounds, returns None.
     /// Must be consistent with `.len()`.
-    fn try_get(&self, index: usize) -> Option<&SlabBlock<Self::Data>>;
+    fn try_at(&self, index: usize) -> Option<&SlabBlock<Self::Data>>;
 
     /// Tries to index the storage to get a mutable (exclusive) reference. If
     /// the index is out of bounds, returns None. Must be consistent with
     /// `.len()`.
-    fn try_get_mut(
+    fn try_at_mut(
         &mut self,
         index: usize,
     ) -> Option<&mut SlabBlock<Self::Data>>;
 
     /// Indexes the storage. If the index is out of bounds, panic. Must be
     /// consistent with `.len()`.
-    fn get(&self, index: usize) -> &SlabBlock<Self::Data> {
+    fn at(&self, index: usize) -> &SlabBlock<Self::Data> {
         let len = self.len();
-        self.try_get(index).unwrap_or_else(|| {
+        self.try_at(index).unwrap_or_else(|| {
             panic!("Invalid slab storage index {} (length is {})", index, len)
         })
     }
 
     /// Indexes the storage to get a mutable (exclusive) reference. If the index
     /// is out of bounds, panic. Must be consistent with `.len()`.
-    fn get_mut(&mut self, index: usize) -> &mut SlabBlock<Self::Data> {
+    fn at_mut(&mut self, index: usize) -> &mut SlabBlock<Self::Data> {
         let len = self.len();
-        self.try_get_mut(index).unwrap_or_else(|| {
+        self.try_at_mut(index).unwrap_or_else(|| {
             panic!("Invalid slab storage index {} (length is {})", index, len)
         })
     }
@@ -117,15 +117,15 @@ impl<'slice, T> SlabStorage for &'slice mut [SlabBlock<T>] {
         self.len()
     }
 
-    fn try_get(&self, index: usize) -> Option<&SlabBlock<Self::Data>> {
-        (**self).get(index)
+    fn try_at(&self, index: usize) -> Option<&SlabBlock<Self::Data>> {
+        self.get(index)
     }
 
-    fn try_get_mut(
+    fn try_at_mut(
         &mut self,
         index: usize,
     ) -> Option<&mut SlabBlock<Self::Data>> {
-        (**self).get_mut(index)
+        self.get_mut(index)
     }
 }
 
@@ -170,13 +170,13 @@ where
         };
 
         let mut i = 0;
-        while let Some(elem) = this.storage.try_get(i) {
+        while let Some(elem) = this.storage.try_at(i) {
             elem.next.store(i + 1, Release);
             i += 1;
         }
 
         if let Some(last) = i.checked_sub(1) {
-            this.storage.get(last).next.store(NULL_IDX, Release);
+            this.storage.at(last).next.store(NULL_IDX, Release);
         }
 
         this
@@ -201,11 +201,11 @@ where
 
             while next != NULL_IDX {
                 unsafe {
-                    let cell = self.storage.get(next).value.get();
+                    let cell = self.storage.at(next).value.get();
                     (*cell).as_mut_ptr().drop_in_place();
                 }
                 curr = next;
-                next = self.storage.get(curr).next.load(Relaxed);
+                next = self.storage.at(curr).next.load(Relaxed);
             }
 
             DestroyList { begin, end: curr }
@@ -219,7 +219,7 @@ where
             let mut free = self.free_list.load(Acquire);
 
             loop {
-                self.storage.get(freed.end).next.store(free, Relaxed);
+                self.storage.at(freed.end).next.store(free, Relaxed);
                 let result = self.free_list.compare_exchange(
                     free,
                     freed.begin,
@@ -245,7 +245,7 @@ where
                 break Err(GenericAllocErr);
             }
 
-            let next = self.storage.get(free).next.load(Relaxed);
+            let next = self.storage.at(free).next.load(Relaxed);
             let result =
                 self.free_list.compare_exchange(free, next, Release, Acquire);
             match result {
@@ -268,7 +268,7 @@ where
             }
 
             self.storage
-                .get(data_bits(node))
+                .at(data_bits(node))
                 .next
                 .store(data_bits(destroy), Relaxed);
 
@@ -292,10 +292,10 @@ where
 
         while curr != NULL_IDX {
             unsafe {
-                let cell = self.storage.get(curr).value.get();
+                let cell = self.storage.at(curr).value.get();
                 (*cell).as_mut_ptr().drop_in_place();
             }
-            curr = data_bits(*self.storage.get_mut(curr).next.get_mut());
+            curr = data_bits(*self.storage.at_mut(curr).next.get_mut());
         }
     }
 }
