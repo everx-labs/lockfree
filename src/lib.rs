@@ -56,7 +56,7 @@ pub struct GenericAllocErr;
 /// A block on the slab used to allocate memory.
 #[derive(Debug)]
 pub struct SlabBlock<T> {
-    value: UnsafeCell<MaybeUninit<T>>,
+    data: UnsafeCell<MaybeUninit<T>>,
     next: AtomicUsize,
 }
 
@@ -64,7 +64,7 @@ impl<T> SlabBlock<T> {
     /// Initializes a blank slab.
     pub fn new() -> Self {
         Self {
-            value: UnsafeCell::new(unsafe { MaybeUninit::uninit() }),
+            data: UnsafeCell::new(unsafe { MaybeUninit::uninit() }),
             next: AtomicUsize::new(0),
         }
     }
@@ -190,26 +190,23 @@ where
             return Err(expected);
         }
 
-        let result = self
-            .destroy_list
-            .compare_exchange(expected, NULL_IDX, Release, Acquire);
+        self.destroy_list
+            .compare_exchange(expected, NULL_IDX, Release, Acquire)?;
 
-        result.map(|_| {
-            let begin = data_bits(expected);
-            let mut curr = begin;
-            let mut next = begin;
+        let begin = data_bits(expected);
+        let mut curr = begin;
+        let mut next = begin;
 
-            while next != NULL_IDX {
-                unsafe {
-                    let cell = self.storage.at(next).value.get();
-                    (*cell).as_mut_ptr().drop_in_place();
-                }
-                curr = next;
-                next = self.storage.at(curr).next.load(Relaxed);
+        while next != NULL_IDX {
+            unsafe {
+                let cell = self.storage.at(next).data.get();
+                (*cell).as_mut_ptr().drop_in_place();
             }
+            curr = next;
+            next = self.storage.at(curr).next.load(Relaxed);
+        }
 
-            DestroyList { begin, end: curr }
-        })
+        Ok(DestroyList { begin, end: curr })
     }
 
     /// Destroy the free list and puts the new free nodes in the free list.
@@ -292,7 +289,7 @@ where
 
         while curr != NULL_IDX {
             unsafe {
-                let cell = self.storage.at(curr).value.get();
+                let cell = self.storage.at(curr).data.get();
                 (*cell).as_mut_ptr().drop_in_place();
             }
             curr = data_bits(*self.storage.at_mut(curr).next.get_mut());
@@ -366,7 +363,25 @@ where
         &self,
         val: S::Data,
     ) -> Result<GenericAlloc<S, P>, GenericAllocErr> {
-        unimplemented!()
+        let pause = self.inner.pause();
+        let index = self.inner.slab.alloc()?;
+        unsafe {
+            let cell = self.inner.slab.storage.at(index).data.get();
+            (*cell).as_mut_ptr().write(val);
+        }
+        drop(pause);
+
+        Ok(GenericAlloc { index, collector: self.inner.clone() })
+    }
+}
+
+impl<S, P> Clone for GenericCollector<S, P>
+where
+    S: SlabStorage,
+    P: SharedPtr<Target = CollectorInner<S>>,
+{
+    fn clone(&self) -> Self {
+        Self { inner: self.inner.clone() }
     }
 }
 
@@ -378,12 +393,36 @@ where
     collector: &'col CollectorInner<S>,
 }
 
+impl<'col, S> Drop for Pause<'col, S>
+where
+    S: SlabStorage,
+{
+    fn drop(&mut self) {
+        let mut bits = self.collector.threads_epoch.load(Acquire);
+
+        loop {
+            let new_bits = if data_bits(bits) == 1 {
+                set_epoch_bit(bits, epoch_bit(bits) ^ 1)
+            } else {
+                set_data_bits(bits, data_bits(bits) + 1)
+            };
+
+            let result = self
+                .collector
+                .threads_epoch
+                .compare_exchange(bits, new_bits, Release, Acquire);
+        }
+    }
+}
+
 /// An allocation of memory.
+#[derive(Debug)]
 pub struct GenericAlloc<S, P>
 where
     S: SlabStorage,
     P: SharedPtr<Target = CollectorInner<S>>,
 {
+    index: usize,
     collector: P,
 }
 
