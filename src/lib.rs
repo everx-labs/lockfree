@@ -70,14 +70,63 @@ impl<T> SlabBlock<T> {
     }
 }
 
-/// The type of a slice used by the slab allocator.
-pub type SlabSlice<S> = [SlabBlock<<S as SlabStorage>::Data>];
-
 /// A device for storage of a slab, such as an array on the stack, or a
 /// heap-allocated vector.
-pub trait SlabStorage: DerefMut<Target = SlabSlice<Self>> {
-    /// Dataent that this storage can hold.
+pub trait SlabStorage {
+    /// Data that the slab will manage through this storage.
     type Data;
+
+    /// Length of this storage.
+    fn len(&self) -> usize;
+
+    /// Tries to index the storage. If the index is out of bounds, returns None.
+    /// Must be consistent with `.len()`.
+    fn try_get(&self, index: usize) -> Option<&SlabBlock<Self::Data>>;
+
+    /// Tries to index the storage to get a mutable (exclusive) reference. If
+    /// the index is out of bounds, returns None. Must be consistent with
+    /// `.len()`.
+    fn try_get_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut SlabBlock<Self::Data>>;
+
+    /// Indexes the storage. If the index is out of bounds, panic. Must be
+    /// consistent with `.len()`.
+    fn get(&self, index: usize) -> &SlabBlock<Self::Data> {
+        let len = self.len();
+        self.try_get(index).unwrap_or_else(|| {
+            panic!("Invalid slab storage index {} (length is {})", index, len)
+        })
+    }
+
+    /// Indexes the storage to get a mutable (exclusive) reference. If the index
+    /// is out of bounds, panic. Must be consistent with `.len()`.
+    fn get_mut(&mut self, index: usize) -> &mut SlabBlock<Self::Data> {
+        let len = self.len();
+        self.try_get_mut(index).unwrap_or_else(|| {
+            panic!("Invalid slab storage index {} (length is {})", index, len)
+        })
+    }
+}
+
+impl<'slice, T> SlabStorage for &'slice mut [SlabBlock<T>] {
+    type Data = T;
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn try_get(&self, index: usize) -> Option<&SlabBlock<Self::Data>> {
+        (**self).get(index)
+    }
+
+    fn try_get_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut SlabBlock<Self::Data>> {
+        (**self).get_mut(index)
+    }
 }
 
 /// A shared pointer data type.
@@ -120,10 +169,14 @@ where
             storage,
         };
 
-        for (i, elem) in this.storage[..].iter().enumerate() {
-            let index =
-                if i + 1 < this.storage.len() { i + 1 } else { NULL_IDX };
-            elem.next.store(index, Release);
+        let mut i = 0;
+        while let Some(elem) = this.storage.try_get(i) {
+            elem.next.store(i + 1, Release);
+            i += 1;
+        }
+
+        if let Some(last) = i.checked_sub(1) {
+            this.storage.get(last).next.store(NULL_IDX, Release);
         }
 
         this
@@ -148,11 +201,11 @@ where
 
             while next != NULL_IDX {
                 unsafe {
-                    let cell = self.storage[next].value.get();
+                    let cell = self.storage.get(next).value.get();
                     (*cell).as_mut_ptr().drop_in_place();
                 }
                 curr = next;
-                next = self.storage[curr].next.load(Relaxed);
+                next = self.storage.get(curr).next.load(Relaxed);
             }
 
             DestroyList { begin, end: curr }
@@ -166,7 +219,7 @@ where
             let mut free = self.free_list.load(Acquire);
 
             loop {
-                self.storage[freed.end].next.store(free, Relaxed);
+                self.storage.get(freed.end).next.store(free, Relaxed);
                 let result = self.free_list.compare_exchange(
                     free,
                     freed.begin,
@@ -192,7 +245,7 @@ where
                 break Err(GenericAllocErr);
             }
 
-            let next = self.storage[free].next.load(Relaxed);
+            let next = self.storage.get(free).next.load(Relaxed);
             let result =
                 self.free_list.compare_exchange(free, next, Release, Acquire);
             match result {
@@ -214,7 +267,8 @@ where
                     .unwrap_or_else(|new_destroy| new_destroy);
             }
 
-            self.storage[data_bits(node)]
+            self.storage
+                .get(data_bits(node))
                 .next
                 .store(data_bits(destroy), Relaxed);
 
@@ -238,10 +292,10 @@ where
 
         while curr != NULL_IDX {
             unsafe {
-                let cell = self.storage[curr].value.get();
+                let cell = self.storage.get(curr).value.get();
                 (*cell).as_mut_ptr().drop_in_place();
             }
-            curr = data_bits(*self.storage[curr].next.get_mut());
+            curr = data_bits(*self.storage.get_mut(curr).next.get_mut());
         }
     }
 }
@@ -342,7 +396,7 @@ pub type Alloc<S> = GenericAlloc<S, Arc<CollectorInner<S>>>;
 
 #[cfg(not(feature = "std"))]
 /// A collector with the default pointer as a plain reference.
-type Collector<'inner, S> = GenericCollector<S, &'inner CollectorInner<S>>;
+pub type Collector<'inner, S> = GenericCollector<S, &'inner CollectorInner<S>>;
 #[cfg(not(feature = "std"))]
 /// An alloc with the default pointer to collector as a plain reference.
-type Alloc<'inner, S> = GenericAlloc<S, &'inner CollectorInner<S>>;
+pub type Alloc<'inner, S> = GenericAlloc<S, &'inner CollectorInner<S>>;
