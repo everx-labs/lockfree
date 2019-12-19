@@ -62,7 +62,7 @@ impl<T> SlabBlock<T> {
     /// Initializes a blank slab.
     pub fn new() -> Self {
         Self {
-            data: UnsafeCell::new(unsafe { MaybeUninit::uninit() }),
+            data: UnsafeCell::new(MaybeUninit::uninit()),
             next: AtomicUsize::new(0),
         }
     }
@@ -373,7 +373,7 @@ where
         }
         drop(pause);
 
-        Ok(GenericSlabBox { index, alloc: self.inner.clone() })
+        Ok(GenericSlabBox { index, alloc: self.clone() })
     }
 }
 
@@ -425,8 +425,38 @@ where
     S: SlabStorage,
     P: SharedPtr<Target = SlabAllocInner<S>>,
 {
+    /// Index in the slab of this allocation.
     index: usize,
-    alloc: P,
+    /// Pointer to allocator.
+    alloc: GenericSlabAlloc<S, P>,
+}
+
+impl<S, P> Deref for GenericSlabBox<S, P>
+where
+    S: SlabStorage,
+    P: SharedPtr<Target = SlabAllocInner<S>>,
+{
+    type Target = S::Data;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe {
+            let cell = self.alloc.inner.slab.storage.at(self.index).data.get();
+            &(*(*cell).as_ptr())
+        }
+    }
+}
+
+impl<S, P> DerefMut for GenericSlabBox<S, P>
+where
+    S: SlabStorage,
+    P: SharedPtr<Target = SlabAllocInner<S>>,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            let cell = self.alloc.inner.slab.storage.at(self.index).data.get();
+            &mut (*(*cell).as_mut_ptr())
+        }
+    }
 }
 
 /// An allocator with the default pointer as Arc.
