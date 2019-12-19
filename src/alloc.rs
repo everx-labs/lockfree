@@ -31,6 +31,7 @@ const fn set_epoch_bit(bits: usize, epoch_bit: usize) -> usize {
 const NULL_IDX: usize = !0;
 
 /// Initializes a slab array.
+#[macro_export]
 macro_rules! make_slab_array {
     ($size:expr) => {
         unsafe {
@@ -49,7 +50,7 @@ macro_rules! make_slab_array {
 
 /// Returned if out of memory.
 #[derive(Debug, Clone, Copy)]
-pub struct GenericSlabBoxErr;
+pub struct SlabBoxErr;
 
 /// A block on the slab used to allocate memory.
 #[derive(Debug)]
@@ -230,14 +231,14 @@ where
         })
     }
 
-    /// GenericSlabBoxates a node. Should only be called if no one is freeing
+    /// SlabBoxates a node. Should only be called if no one is freeing
     /// the destroy list.
-    fn alloc(&self) -> Result<usize, GenericSlabBoxErr> {
+    fn alloc(&self) -> Result<usize, SlabBoxErr> {
         let mut free = self.free_list.load(Acquire);
 
         loop {
             if free == NULL_IDX {
-                break Err(GenericSlabBoxErr);
+                break Err(SlabBoxErr);
             }
 
             let next = self.storage.at(free).next.load(Relaxed);
@@ -340,7 +341,7 @@ where
 
 /// An allocator. Manages concurrent memory.
 #[derive(Debug)]
-pub struct GenericSlabAlloc<S, P>
+pub struct SlabAlloc<S, P>
 where
     S: SlabStorage,
     P: SharedPtr<Target = SlabAllocInner<S>>,
@@ -349,7 +350,7 @@ where
     inner: P,
 }
 
-impl<S, P> GenericSlabAlloc<S, P>
+impl<S, P> SlabAlloc<S, P>
 where
     S: SlabStorage,
     P: SharedPtr<Target = SlabAllocInner<S>>,
@@ -360,11 +361,8 @@ where
         Self { inner }
     }
 
-    /// GenericSlabBoxates memory, returning error if no space is available.
-    pub fn alloc(
-        &self,
-        val: S::Data,
-    ) -> Result<GenericSlabBox<S, P>, GenericSlabBoxErr> {
+    /// SlabBoxates memory, returning error if no space is available.
+    pub fn alloc(&self, val: S::Data) -> Result<SlabBox<S, P>, SlabBoxErr> {
         let pause = self.inner.pause();
         let index = self.inner.slab.alloc()?;
         unsafe {
@@ -373,11 +371,11 @@ where
         }
         drop(pause);
 
-        Ok(GenericSlabBox { index, alloc: self.clone() })
+        Ok(SlabBox { index, alloc: self.clone() })
     }
 }
 
-impl<S, P> Clone for GenericSlabAlloc<S, P>
+impl<S, P> Clone for SlabAlloc<S, P>
 where
     S: SlabStorage,
     P: SharedPtr<Target = SlabAllocInner<S>>,
@@ -420,18 +418,43 @@ where
 
 /// An allocation of memory.
 #[derive(Debug)]
-pub struct GenericSlabBox<S, P>
+pub struct SlabBox<S, P>
 where
     S: SlabStorage,
     P: SharedPtr<Target = SlabAllocInner<S>>,
 {
     /// Index in the slab of this allocation.
     index: usize,
-    /// Pointer to allocator.
-    alloc: GenericSlabAlloc<S, P>,
+    /// Original allocator.
+    alloc: SlabAlloc<S, P>,
 }
 
-impl<S, P> Deref for GenericSlabBox<S, P>
+impl<S, P> SlabBox<S, P>
+where
+    S: SlabStorage,
+    P: SharedPtr<Target = SlabAllocInner<S>>,
+{
+    /// Make this box atomic and thus inner-mutable (i.e. the pointer can be
+    /// changed but it is not seen as mutable by the type system.
+    pub fn atomic(self) -> AtomicBox<S, P> {
+        AtomicBox {
+            index: AtomicUsize::new(self.index),
+            alloc: self.alloc.clone(),
+        }
+    }
+}
+
+impl<S, P> Drop for SlabBox<S, P>
+where
+    S: SlabStorage,
+    P: SharedPtr<Target = SlabAllocInner<S>>,
+{
+    fn drop(&mut self) {
+        self.alloc.inner.slab.free(self.index);
+    }
+}
+
+impl<S, P> Deref for SlabBox<S, P>
 where
     S: SlabStorage,
     P: SharedPtr<Target = SlabAllocInner<S>>,
@@ -446,7 +469,7 @@ where
     }
 }
 
-impl<S, P> DerefMut for GenericSlabBox<S, P>
+impl<S, P> DerefMut for SlabBox<S, P>
 where
     S: SlabStorage,
     P: SharedPtr<Target = SlabAllocInner<S>>,
@@ -459,17 +482,47 @@ where
     }
 }
 
-/// An allocator with the default pointer as Arc.
-#[cfg(feature = "std")]
-pub type SlabAlloc<S> = GenericSlabAlloc<S, Arc<SlabAllocInner<S>>>;
-#[cfg(feature = "std")]
-/// A slab allocated box with the default pointer to allocator as Arc.
-pub type SlabBox<S> = GenericSlabBox<S, Arc<SlabAllocInner<S>>>;
+/// An atomic slab allocated box.
+pub struct AtomicBox<S, P>
+where
+    S: SlabStorage,
+    P: SharedPtr<Target = SlabAllocInner<S>>,
+{
+    /// Atomically stored index of the slab node.
+    index: AtomicUsize,
+    /// Original allocator.
+    alloc: SlabAlloc<S, P>,
+}
 
-#[cfg(not(feature = "std"))]
-/// An allocator with the default pointer as a plain reference.
-pub type SlabAlloc<'inner, S> = GenericSlabAlloc<S, &'inner SlabAllocInner<S>>;
-#[cfg(not(feature = "std"))]
-/// A slab allocated box with the default pointer to allocator as a plain
-/// reference.
-pub type SlabBox<'inner, S> = GenericSlabBox<S, &'inner SlabAllocInner<S>>;
+/// A slab allocator with owned pointer and slab storage.
+#[cfg(feature = "std")]
+pub type OwnedSlabAlloc<T> =
+    SlabAlloc<Box<[SlabBlock<T>]>, Arc<SlabAllocInner<Box<[SlabBlock<T>]>>>>;
+
+/// A slab allocated box with owned pointer and slab storage.
+#[cfg(feature = "std")]
+pub type OwnedSlabBox<T> =
+    SlabBox<Box<[SlabBlock<T>]>, Arc<SlabAllocInner<Box<[SlabBlock<T>]>>>>;
+
+/// An atomic slab allocated box with owned pointer and slab storage.
+#[cfg(feature = "std")]
+pub type OwnedAtomicBox<T> =
+    AtomicBox<Box<[SlabBlock<T>]>, Arc<SlabAllocInner<Box<[SlabBlock<T>]>>>>;
+
+/// A slab allocator with borrowed pointer and slab storage.
+pub type RefSlabAlloc<'slab, 'inner, T> = SlabAlloc<
+    &'slab [SlabBlock<T>],
+    &'inner SlabAllocInner<&'slab [SlabBlock<T>]>,
+>;
+
+/// A slab allocated box with borrowed pointer and slab storage.
+pub type RefSlabBox<'slab, 'inner, T> = SlabBox<
+    &'slab [SlabBlock<T>],
+    &'inner SlabAllocInner<&'slab [SlabBlock<T>]>,
+>;
+
+/// An atomic slab allocated box with borrowed pointer and slab storage.
+pub type RefAtomicBox<'slab, 'inner, T> = AtomicBox<
+    &'slab [SlabBlock<T>],
+    &'inner SlabAllocInner<&'slab [SlabBlock<T>]>,
+>;
