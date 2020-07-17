@@ -334,12 +334,12 @@ macro_rules! make_shared_incin {
                     match Arc::try_unwrap(arc) {
                         Ok(mut incin) => {
                             incin.clear();
-                            replace(&mut self.inner, Arc::new(incin));
+                            self.inner = Arc::new(incin);
                         },
 
                         Err(arc) => {
                             arc.try_clear();
-                            replace(&mut self.inner, arc);
+                            self.inner = arc;
                         }
                     }
                 }
