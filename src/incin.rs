@@ -322,25 +322,24 @@ macro_rules! make_shared_incin {
                          incinerator.");
                 $vis fn clear(&mut self) {
                     use std::{
-                        mem::{forget, replace, uninitialized},
+                        mem::replace,
                         sync::Arc,
                     };
+                    // use incin::Incinerator;
 
                     // I know this sounds weird. This is because Arc::get_mut
                     // locks stuff. We don't want that.
-                    let arc = unsafe {
-                        replace(&mut self.inner, uninitialized())
-                    };
+                    let arc = replace(&mut self.inner, Arc::new(Default::default()));
 
                     match Arc::try_unwrap(arc) {
                         Ok(mut incin) => {
                             incin.clear();
-                            forget(replace(&mut self.inner, Arc::new(incin)));
+                            self.inner = Arc::new(incin);
                         },
 
                         Err(arc) => {
                             arc.try_clear();
-                            forget(replace(&mut self.inner, arc));
+                            self.inner = arc;
                         }
                     }
                 }
