@@ -552,13 +552,14 @@ impl<K, V> List<K, V> {
         new: NonNull<Entry<K, V>>,
         pause: &Pause<Garbage<K, V>>,
     ) -> bool {
-        let res = self.atomic.compare_and_swap(
+        let res = self.atomic.compare_exchange(
             loaded.as_ptr(),
             new.as_ptr(),
             Release,
+            Relaxed
         );
 
-        if res == loaded.as_ptr() {
+        if res == Ok(loaded.as_ptr()) {
             // Clean-up of the old pointer.
             let alloc = OwnedAlloc::from_raw(loaded);
             pause.add_to_incin(Garbage::Entry(alloc));
