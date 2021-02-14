@@ -110,7 +110,7 @@ impl<T> Incinerator<T> {
 
     /// Creates a pause before executing the given closure and resumes the
     /// incinerator only after executing the closure. You should execute the
-    /// whole ABA-problem-suffering cycle of `load` and `compare_and_swap`
+    /// whole ABA-problem-suffering cycle of `load` and `compare_exchange`
     /// inside the closure. See documentation for [`Incinerator::pause`] and
     /// `Pause::resume` for more details.
     pub fn pause_with<F, A>(&self, exec: F) -> A
