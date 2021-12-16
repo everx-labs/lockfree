@@ -530,6 +530,34 @@ mod test {
     }
 
     #[test]
+    fn test_drop() {
+        fn remove(map: Arc<Map<u8, Arc<u8>>>) {
+            let map_cloned = map.clone();
+            if let Some(item) = map.get(&0) {
+                std::thread::spawn(
+                    move || {
+                        assert!(map_cloned.remove(&0).is_some());
+                    }
+                ).join().ok();
+            }
+        }
+
+        let map = Arc::new(Map::new());
+        let item = Arc::new(0);
+        map.insert(0, item.clone());
+        remove(map.clone());
+        map.insert(0, item.clone());
+        remove(map.clone());
+        map.insert(0, item.clone());
+        remove(map.clone());
+        map.insert(0, item.clone());
+        remove(map.clone());
+        map.insert(0, item.clone());
+        remove(map.clone());
+        assert_eq!(Arc::strong_count(&item), 1);
+    }
+
+    #[test]
     fn create() {
         let map = Map::new();
         assert!(map
