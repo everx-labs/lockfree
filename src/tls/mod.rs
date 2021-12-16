@@ -161,50 +161,51 @@ impl<T> ThreadLocal<T> {
         }
     }
 
-    pub fn clear2<F: Fn(&T) -> ()>(&self, f: F) {
-        let mut table = &*self.top;
+    pub fn clear2(&self, f: fn(&T) -> ()) {
+        let table = &*self.top;
+        fn func<Z>(table: &Table<Z>, f: fn(&Z) -> ()) {
+            for a in table.nodes.iter() {
+                // Load what is in there.
+                let in_place = a.atomic.load(Acquire);
 
-        for a in table.nodes.iter() {
-            // Load what is in there.
-            let in_place = a.atomic.load(Acquire);
+                // Null means there is nothing.
+                if in_place.is_null() {
+                    continue;
+                }
 
-            // Null means there is nothing.
-            if in_place.is_null() {
-                continue;
+                // Having in_place's lower bit set to 0 means it is a
+                // pointer to entry.
+                if in_place as usize & 1 == 0 {
+                    // This is safe since:
+                    //
+                    // 1. We only store nodes with cleared lower bit if it is an
+                    // entry.
+                    //
+                    // 2. We only delete stuff when we are behind mutable
+                    // references.
+                    let entry = unsafe { &*(in_place as *mut Entry<Z>) };
+                    f(&entry.data);
+                } else {
+                    // The remaining case (non-null with lower bit set to 1) means
+                    // we have a child table.
+                    // Clear the pointer first lower bit so we can dereference it.
+                    let table_ptr = (in_place as usize & !1) as *mut Table<Z>;
+                    // Set it as the table to be checked in the next iteration.
+                    // This is safe since:
+                    //
+                    // 1. We only store nodes with marked lower bit if it is an
+                    // table.
+                    //
+                    // 2. W cleared up the bit above so we can get the original
+                    // pointer.
+                    //
+                    // 3. We only delete stuff when we are behind mutable
+                    // references.
+                    func(unsafe { &*table_ptr }, f);
+                }
             }
-
-            // Having in_place's lower bit set to 0 means it is a
-            // pointer to entry.
-            if in_place as usize & 1 == 0 {
-                // This is safe since:
-                //
-                // 1. We only store nodes with cleared lower bit if it is an
-                // entry.
-                //
-                // 2. We only delete stuff when we are behind mutable
-                // references.
-                let entry = unsafe { &*(in_place as *mut Entry<T>) };
-                f(&entry.data);
-                continue;
-            }
-
-            // The remaining case (non-null with lower bit set to 1) means
-            // we have a child table.
-            // Clear the pointer first lower bit so we can dereference it.
-            let table_ptr = (in_place as usize & !1) as *mut Table<T>;
-            // Set it as the table to be checked in the next iteration.
-            // This is safe since:
-            //
-            // 1. We only store nodes with marked lower bit if it is an
-            // table.
-            //
-            // 2. W cleared up the bit above so we can get the original
-            // pointer.
-            //
-            // 3. We only delete stuff when we are behind mutable
-            // references.
-            table = unsafe { &*table_ptr };
-        }
+        };
+        func(table, f);
     }
 
 
