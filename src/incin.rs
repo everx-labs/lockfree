@@ -224,8 +224,8 @@ impl<'incin, T> Drop for Pause<'incin, T> {
     fn drop(&mut self) {
         if self.incin.counter.fetch_sub(1, AcqRel) == 1 {
             // If the previous value was 1, this means now it is 0 and... we can
-            // delete our local list.
-            self.incin.tls_list.get().map(GarbageList::clear);
+            // delete all local lists.
+            self.incin.tls_list.clear2(GarbageList::clear);
         }
     }
 }
