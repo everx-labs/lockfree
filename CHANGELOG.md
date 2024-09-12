@@ -1,3 +1,6 @@
+# 0.5.2 (release)
+* Added get_cloned adapter for map instead of get(key).map(|kv| kv.val().clone())
+
 # 0.5.1 (release)
 * Performance improvement.
 * Sanity checks added.

@@ -158,6 +158,16 @@ where
         unsafe { self.top.get(key, hash, pause) }
     }
 
+    /// adapter for get(key).map(|kv| kv.val().clone())
+    pub fn get_cloned<Q>(&self, key: &Q) -> Option<V>
+    where
+        Q: ?Sized + Hash + Ord,
+        K: Borrow<Q>,
+        V: Clone,
+    {
+        self.get(key).map(|k_v| k_v.val().clone())
+    }
+
     /// Inserts unconditionally the given key and value. If there was a
     /// previously stored value, it is returned.
     pub fn insert(&self, key: K, val: V) -> Option<Removed<K, V>>

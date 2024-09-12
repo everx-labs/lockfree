@@ -21,15 +21,15 @@ where
     V: 'map,
 {
     pair: &'map (K, V),
-    pause: Pause<'map, Garbage<K, V>>,
+    _pause: Pause<'map, Garbage<K, V>>,
 }
 
 impl<'map, K, V> ReadGuard<'map, K, V> {
     pub(super) fn new(
         pair: &'map (K, V),
-        pause: Pause<'map, Garbage<K, V>>,
+        _pause: Pause<'map, Garbage<K, V>>,
     ) -> Self {
-        Self { pair, pause }
+        Self { pair, _pause }
     }
 
     /// Utility method. Returns the key of this borrowed entry.
